@@ -86,17 +86,65 @@ class ChatOut(BaseModel):
     reply: str
 
 
+async def _process_web_chat(content: str, session_key: str) -> str:
+    """
+    处理 Web 会话：
+    - 正常 assistant 回复：直接返回
+    - 若模型改用 message 工具对同一 web 会话发消息，则拦截并作为真正回复回填到 session
+    """
+    from nanobot.agent.tools.message import MessageTool
+
+    chat_id = session_key.split(":")[-1] if ":" in session_key else "default"
+    message_tool = _gateway_agent.tools.get("message")
+    captured: dict[str, str] = {}
+
+    if isinstance(message_tool, MessageTool):
+        original_callback = message_tool._send_callback
+
+        async def _capture_or_forward(msg):
+            if getattr(msg, "channel", "") == "web" and getattr(msg, "chat_id", "") == chat_id:
+                captured["content"] = msg.content or ""
+                return
+            if original_callback:
+                await original_callback(msg)
+
+        message_tool.set_send_callback(_capture_or_forward)
+        try:
+            reply = await _gateway_agent.process_direct(
+                content,
+                session_key=session_key,
+                channel="web",
+                chat_id=chat_id,
+            )
+        finally:
+            message_tool.set_send_callback(original_callback)
+    else:
+        reply = await _gateway_agent.process_direct(
+            content,
+            session_key=session_key,
+            channel="web",
+            chat_id=chat_id,
+        )
+
+    if reply:
+        return reply
+
+    tool_message = captured.get("content", "")
+    if tool_message:
+        session = _gateway_agent.sessions.get_or_create(session_key)
+        session.add_message("assistant", tool_message)
+        _gateway_agent.sessions.save(session)
+        return tool_message
+
+    return ""
+
+
 @app.post("/chat", response_model=ChatOut)
 async def chat(body: ChatIn) -> ChatOut:
     """发消息，同请求内等待 bot 回复。"""
     _check_connected()
     try:
-        reply = await _gateway_agent.process_direct(
-            body.message,
-            session_key=body.session_key,
-            channel="web",
-            chat_id=body.session_key.split(":")[-1] if ":" in body.session_key else "default",
-        )
+        reply = await _process_web_chat(body.message, body.session_key)
     except TimeoutError:
         raise HTTPException(status_code=504, detail="Agent reply timeout")
     except Exception as e:
@@ -117,7 +165,68 @@ async def history(session_key: str = "web:default") -> JSONResponse:
 
 async def _get_session_messages(session_key: str) -> list[dict[str, Any]]:
     session = _gateway_agent.sessions.get_or_create(session_key)
-    return list(session.messages)
+    out: list[dict[str, Any]] = []
+    for m in session.messages:
+        role = m.get("role")
+        timestamp = m.get("timestamp")
+
+        if role == "assistant":
+            tool_calls = m.get("tool_calls") or []
+            if isinstance(tool_calls, list):
+                for tc in tool_calls:
+                    event = _tool_call_to_event(tc, timestamp)
+                    if event:
+                        out.append(event)
+            if m.get("content"):
+                out.append(m)
+            continue
+
+        if role == "user":
+            out.append(m)
+            continue
+
+    return out
+
+
+def _tool_call_to_event(tool_call: dict[str, Any], timestamp: str | None) -> dict[str, Any] | None:
+    """将有价值的 tool_call 映射为前端可展示的 event。"""
+    try:
+        fn = ((tool_call or {}).get("function") or {})
+        name = fn.get("name")
+        raw_args = fn.get("arguments") or "{}"
+        args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+    except Exception:
+        return None
+
+    content = None
+    if name == "web_fetch":
+        url = args.get("url", "")
+        content = f"正在抓取网页资料：{url}" if url else "正在抓取网页资料"
+    elif name == "read_file":
+        path = args.get("path", "")
+        content = f"正在读取文件：{path}" if path else "正在读取文件"
+    elif name in {"edit_file", "write_file"}:
+        path = args.get("path", "")
+        verb = "正在更新文件" if name == "edit_file" else "正在写入文件"
+        content = f"{verb}：{path}" if path else verb
+    elif name == "exec":
+        command = args.get("command", "")
+        content = f"正在执行命令：{command}" if command else "正在执行命令"
+    elif name == "list_dir":
+        path = args.get("path", ".")
+        content = f"正在扫描目录：{path}"
+    elif name == "message":
+        # Web 会话下 message 工具的正文会单独回填成 assistant，不再展示成 event。
+        return None
+
+    if not content:
+        return None
+
+    return {
+        "role": "event",
+        "content": content,
+        "timestamp": timestamp,
+    }
 
 
 @app.get("/sessions")
