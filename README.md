@@ -1,17 +1,18 @@
 # nanobot-web-launcher
 
-A small launcher that starts a `nanobot` gateway and exposes a minimal **web UI + REST API** for chatting and inspecting sessions.
+A thin FastAPI-based launcher that starts a `nanobot` gateway and exposes a minimal **web UI + REST API** for chatting and inspecting sessions.
+It's so easy to integrate with your existing project
 
-- 给 nanobot 加了一个「网页聊天入口」
-- 给 nanobot 增加聊天API
-- 几乎未改动原项目，尽量避免源代码升级冲突
+- 给 nanobot 增加【网页聊天入口】
+- 给 nanobot 增加【聊天API】
+- 未改动上游 nanobot 源码，尽量避免源代码升级冲突
 
 ---
 
 ## Features
 
 - **Minimal REST API**
-  - `POST /chat`：一问一答，同一请求内返回结果；
+  - `POST /chat`：多轮对话，一问一答，同一请求内返回结果；
   - `GET /history`：按 `session_key` 拉取单个会话历史；
   - `GET /sessions`：列出当前 workspace 下所有会话（用于在 UI 里做「渠道 / 会话」列表）。
 
@@ -19,6 +20,9 @@ A small launcher that starts a `nanobot` gateway and exposes a minimal **web UI 
   - 纯 HTML + CSS + 原生 JS（无框架，结构简单，方便魔改）；
   - 左侧固定一个 `web` 渠道（网页自己的会话 `web:default`），下面自动列出其它渠道（如 Telegram）的会话，点击可查看历史；
   - 支持 emoji 显示、自动滚动到底部。
+
+- **UI 为可选模块**
+  - 如果只需要 REST API，可以完全忽略 `ui/`，不影响launcher工作。
 
 ---
 
@@ -35,9 +39,8 @@ bot/
     index.html         # 入口（跳转到 chat）
     chat.html          # 对话页面（左侧渠道 / 右侧消息）
   bots/
-    little_accountor/  # 你的 nanobot 工作区（不包含在 Git 示例中）
+    your_bot_workspace/  # 你的 nanobot 工作区（不包含在 Git 示例中）
 ```
-
 
 ---
 
@@ -73,9 +76,10 @@ pip install -r requirements.txt
 {
   "config": "bots/little_accountor/config.json",
   "bot_port": 18790,
-  "api_port": 8000,
   "workspace": null,
-  "verbose": false
+  "verbose": false,
+
+  "api_port": 8000,
 }
 ```
 
@@ -83,9 +87,10 @@ pip install -r requirements.txt
 
 - **config**：nanobot 的配置文件路径（相对或绝对），相当于 `nanobot gateway -c <config>` 的 `-c` 参数。
 - **bot_port**：nanobot gateway 的端口，目前主要用于日志展示。
-- **api_port**：本项目 FastAPI 对外监听的端口（网页和 REST 都从这里进）。
 - **workspace**：可选，覆盖 workspace 目录；留 `null` 则使用配置里的默认。
 - **verbose**：`true/false`，是否打开 nanobot 的 debug 日志。
+
+- **api_port**：本项目 FastAPI 对外监听的端口（网页和 REST 都从这里进）。
 
 ### 2. nanobot config
 
@@ -203,13 +208,8 @@ http://localhost:8000/
 
 ## License
 
-（根据你的喜好选择一个协议，例如：）
-
-- MIT
-- Apache-2.0
-- GPL-3.0
-
-在仓库根目录添加一个 `LICENSE` 文件，并在这里写上协议名。
+This project is licensed under the **MIT License**.
+See the [LICENSE](./LICENSE) file for details.
 
 ---
 
@@ -217,4 +217,5 @@ http://localhost:8000/
 
 - [nanobot-ai](https://github.com/HKUDS/nanobot) – The underlying personal AI assistant framework.
 - This repo – just a small launcher + web UI wrapper around it. 🙂
+- Design goal – run alongside nanobot with **zero source-code modifications and zero in-process patching**, acting purely as an external launcher + REST layer.
 
