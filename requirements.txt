@@ -1,0 +1,6 @@
+# nano_launch API
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+
+# 与 nanobot gateway 同进程时由 launcher 注入，可选安装
+# nanobot-ai>=0.1.4

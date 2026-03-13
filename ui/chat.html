@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>对话</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+                   "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji",
+                   sans-serif;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header { padding: 0.75rem 1rem; border-bottom: 1px solid #ddd; font-weight: 600; }
+    .main { flex: 1; display: flex; min-height: 0; }
+    .sidebar {
+      width: 200px;
+      border-right: 1px solid #ddd;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      background: #fafafa;
+    }
+    .sidebar-title { font-weight: 600; margin-bottom: 0.5rem; }
+    #channel-list { list-style: none; margin: 0; padding: 0; }
+    #channel-list li {
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #channel-list li.active {
+      background: #e3f2fd;
+      font-weight: 600;
+    }
+    .content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    #messages { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem; }
+    .msg {
+      max-width: 85%;
+      padding: 0.5rem 0.75rem;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.45;
+    }
+    .msg.user { align-self: flex-end; background: #e3f2fd; }
+    .msg.assistant { align-self: flex-start; background: #f5f5f5; }
+    .msg .time { font-size: 0.75rem; color: #666; margin-top: 0.25rem; }
+    .input-row { display: flex; gap: 0.5rem; padding: 0.75rem 1rem; border-top: 1px solid #ddd; }
+    #input { flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #ccc; border-radius: 6px; font-size: 1rem; }
+    #send { padding: 0.5rem 1rem; border: none; border-radius: 6px; background: #2196f3; color: #fff; cursor: pointer; font-size: 1rem; }
+    #send:hover { background: #1976d2; }
+    #send:disabled { background: #ccc; cursor: not-allowed; }
+    .error { color: #c62828; font-size: 0.9rem; padding: 0.25rem 0; }
+  </style>
+</head>
+<body>
+  <header class="header">对话</header>
+  <div class="main">
+    <aside class="sidebar">
+      <div class="sidebar-title">渠道 / 会话</div>
+      <ul id="channel-list"></ul>
+    </aside>
+    <section class="content">
+      <div id="messages"></div>
+      <div id="error" class="error" style="display:none;"></div>
+      <div class="input-row">
+        <input type="text" id="input" placeholder="输入消息..." autocomplete="off">
+        <button type="button" id="send">发送</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    let currentSessionKey = 'web:default';
+    const messagesEl = document.getElementById('messages');
+    const channelListEl = document.getElementById('channel-list');
+    const inputEl = document.getElementById('input');
+    const sendBtn = document.getElementById('send');
+    const errorEl = document.getElementById('error');
+    const inputRowEl = document.querySelector('.input-row');
+
+    let sessionsByChannel = {};
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.style.display = 'block';
+    }
+    function clearError() {
+      errorEl.textContent = '';
+      errorEl.style.display = 'none';
+    }
+
+    function addMessage(role, content, timestamp) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + role;
+      const text = document.createElement('div');
+      text.textContent = content;
+      div.appendChild(text);
+      if (timestamp) {
+        const time = document.createElement('div');
+        time.className = 'time';
+        time.textContent = typeof timestamp === 'string' ? timestamp : new Date().toLocaleTimeString();
+        div.appendChild(time);
+      }
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function renderHistory(messages) {
+      messagesEl.innerHTML = '';
+      (messages || []).forEach(function(m) {
+        const role = m.role === 'user' ? 'user' : 'assistant';
+        addMessage(role, m.content || '', m.timestamp);
+      });
+    }
+
+    async function loadHistoryForSession(sessionKey) {
+      try {
+        const r = await fetch('/history?session_key=' + encodeURIComponent(sessionKey));
+        if (r.ok) {
+          const data = await r.json();
+          renderHistory(data.messages || []);
+        }
+      } catch (e) {
+        // 503 or network: leave messages empty or show hint
+      }
+    }
+
+    async function sendMessage() {
+      const text = (inputEl.value || '').trim();
+      if (!text) return;
+      inputEl.value = '';
+      clearError();
+      addMessage('user', text);
+      sendBtn.disabled = true;
+      try {
+        const r = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, session_key: currentSessionKey })
+        });
+        const data = await r.json().catch(function() { return {}; });
+        if (r.ok) {
+          addMessage('assistant', data.reply || '');
+        } else {
+          if (r.status === 503) showError('服务未连接');
+          else if (r.status === 504) showError('回复超时');
+          else showError('请求失败: ' + (data.detail || r.status));
+        }
+      } catch (e) {
+        showError('网络错误');
+      }
+      sendBtn.disabled = false;
+    }
+
+    function updateInputVisibility() {
+      var isWeb = currentSessionKey.startsWith('web:');
+      if (isWeb) {
+        inputRowEl.style.display = 'flex';
+        inputEl.disabled = false;
+        sendBtn.disabled = false;
+      } else {
+        inputRowEl.style.display = 'none';
+        inputEl.disabled = true;
+        sendBtn.disabled = true;
+      }
+    }
+
+    function renderChannels() {
+      channelListEl.innerHTML = '';
+
+      // 固定 Web 渠道入口
+      var webLi = document.createElement('li');
+      webLi.textContent = 'web';
+      webLi.dataset.channel = 'web';
+      if (currentSessionKey.startsWith('web:')) {
+        webLi.classList.add('active');
+      }
+      webLi.onclick = function () {
+        currentSessionKey = 'web:default';
+        renderChannels();
+        updateInputVisibility();
+        loadHistoryForSession(currentSessionKey);
+      };
+      channelListEl.appendChild(webLi);
+
+      // 其他渠道来自 sessionsByChannel，排除 web
+      var channels = Object.keys(sessionsByChannel)
+        .filter(function (c) { return c && c !== 'web' && c !== 'rest'; })
+        .sort();
+
+      channels.forEach(function(channel) {
+        var li = document.createElement('li');
+        li.textContent = channel;
+        li.dataset.channel = channel;
+        if (!currentSessionKey.startsWith('web:') && currentSessionKey.startsWith(channel + ':')) {
+          li.classList.add('active');
+        }
+        li.onclick = function() { onChannelClick(channel); };
+        channelListEl.appendChild(li);
+      });
+    }
+
+    function onChannelClick(channel) {
+      const list = sessionsByChannel[channel] || [];
+      if (!list.length) return;
+      // updated_at 最新的会话
+      list.sort(function(a, b) {
+        return (b.updated_at || '').localeCompare(a.updated_at || '');
+      });
+      currentSessionKey = list[0].key;
+      renderChannels();
+      updateInputVisibility();
+      loadHistoryForSession(currentSessionKey);
+    }
+
+    async function loadSessions() {
+      try {
+        const r = await fetch('/sessions');
+        if (!r.ok) return;
+        const data = await r.json();
+        const sessions = data.sessions || [];
+        sessionsByChannel = {};
+        sessions.forEach(function(s) {
+          var key = s.key || '';
+          var parts = key.split(':');
+          var channel = parts[0] || '';
+          if (!channel) return;
+          if (!sessionsByChannel[channel]) sessionsByChannel[channel] = [];
+          sessionsByChannel[channel].push(s);
+        });
+        renderChannels();
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    inputEl.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    // 初始：加载 sessions + 默认会话历史
+    updateInputVisibility();
+    loadSessions();
+    loadHistoryForSession(currentSessionKey);
+  </script>
+</body>
+</html>
